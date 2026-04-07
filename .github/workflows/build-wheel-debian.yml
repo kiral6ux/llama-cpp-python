@@ -1,0 +1,49 @@
+name: Build Wheel (Debian trixie CPU)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build_wheel:
+    name: Build cp310 wheel on Debian trixie
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.10-slim
+
+    steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y cmake build-essential git
+
+      - uses: actions/checkout@v4
+        with:
+          ref: v0.3.19
+          submodules: recursive
+
+      - name: Build wheel
+        run: pip wheel . --no-deps -w wheelhouse/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-debian-trixie
+          path: ./wheelhouse/*.whl
+
+  release:
+    name: Release
+    needs: [build_wheel]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          tag_name: v0.3.19-debian-trixie
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
