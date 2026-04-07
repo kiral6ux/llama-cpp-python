@@ -1,6 +1,6 @@
 name: Build CPU wheel for Debian trixie
 
-  on:
+on:
     workflow_dispatch:
 
   jobs:
