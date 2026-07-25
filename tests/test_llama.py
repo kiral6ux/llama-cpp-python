@@ -1,4 +1,5 @@
 import ctypes
+import itertools
 import multiprocessing
 
 import numpy as np
@@ -65,9 +66,33 @@ def llama_cpp_model_path():
 
 
 @pytest.fixture
+def llama_cpp_transformer_model_path():
+    repo_id = "ggml-org/models"
+    filename = "tinyllamas/stories15M-q4_0.gguf"
+    model_path = hf_hub_download(repo_id, filename)
+    return model_path
+
+
+@pytest.fixture
 def llama_cpp_embedding_model_path():
     repo_id = "CompendiumLabs/bge-small-en-v1.5-gguf"
     filename = "bge-small-en-v1.5-q4_k_m.gguf"
+    model_path = hf_hub_download(repo_id, filename)
+    return model_path
+
+
+@pytest.fixture
+def llama_cpp_recurrent_model_path():
+    repo_id = "QuantFactory/mamba-130m-hf-GGUF"
+    filename = "mamba-130m-hf.Q2_K.gguf"
+    model_path = hf_hub_download(repo_id, filename)
+    return model_path
+
+
+@pytest.fixture
+def llama_cpp_hybrid_model_path():
+    repo_id = "tiiuae/Falcon-H1-Tiny-90M-Instruct-GGUF"
+    filename = "Falcon-H1-Tiny-90M-Instruct-Q2_K.gguf"
     model_path = hf_hub_download(repo_id, filename)
     return model_path
 
@@ -233,6 +258,375 @@ root ::= "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10"
     assert number_1 == number_3
 
 
+def test_real_llama_repeated_prompt_cache(llama_cpp_model_path):
+    model = llama_cpp.Llama(
+        llama_cpp_model_path,
+        n_ctx=32,
+        n_batch=32,
+        n_ubatch=32,
+        n_threads=multiprocessing.cpu_count(),
+        n_threads_batch=multiprocessing.cpu_count(),
+        logits_all=False,
+        flash_attn=True,
+        verbose=False,
+    )
+    prompt = "The quick brown fox jumps over the lazy dog. The quick brown fox"
+
+    output_1 = model.create_completion(
+        prompt,
+        max_tokens=6,
+        temperature=0.0,
+        seed=1337,
+    )
+    output_2 = model.create_completion(
+        prompt,
+        max_tokens=6,
+        temperature=0.0,
+        seed=1337,
+    )
+
+    assert output_1["choices"][0]["text"] == " jumps over the lazy dog."
+    assert output_2["choices"][0]["text"] == output_1["choices"][0]["text"]
+
+
+def _assert_prompt_cache_reset_handles_history_edit(
+    model_path,
+    *,
+    is_recurrent: bool,
+    is_hybrid: bool,
+):
+    model = llama_cpp.Llama(
+        model_path,
+        n_ctx=32,
+        n_batch=32,
+        n_ubatch=32,
+        n_threads=multiprocessing.cpu_count(),
+        n_threads_batch=multiprocessing.cpu_count(),
+        logits_all=False,
+        verbose=False,
+    )
+
+    assert model._is_recurrent is is_recurrent
+    assert model._is_hybrid is is_hybrid
+
+    first_prompt = "The quick brown fox"
+    second_prompt = "The slow brown fox"
+    first_tokens = model.tokenize(first_prompt.encode(), add_bos=True, special=True)
+    second_tokens = model.tokenize(second_prompt.encode(), add_bos=True, special=True)
+
+    assert first_tokens != second_tokens
+    assert first_tokens[0] == second_tokens[0]
+
+    first_output = model.create_completion(
+        first_prompt,
+        max_tokens=1,
+        temperature=0.0,
+    )
+    assert isinstance(first_output["choices"][0]["text"], str)
+
+    second_output = model.create_completion(
+        second_prompt,
+        max_tokens=1,
+        temperature=0.0,
+    )
+    assert isinstance(second_output["choices"][0]["text"], str)
+
+
+def test_recurrent_model_prompt_cache_reset(llama_cpp_recurrent_model_path):
+    _assert_prompt_cache_reset_handles_history_edit(
+        llama_cpp_recurrent_model_path,
+        is_recurrent=True,
+        is_hybrid=False,
+    )
+
+
+def test_hybrid_model_prompt_cache_reset(llama_cpp_hybrid_model_path):
+    _assert_prompt_cache_reset_handles_history_edit(
+        llama_cpp_hybrid_model_path,
+        is_recurrent=False,
+        is_hybrid=True,
+    )
+
+
+def _create_test_model(model_path):
+    return llama_cpp.Llama(
+        model_path,
+        n_ctx=64,
+        n_batch=64,
+        n_ubatch=64,
+        n_threads=multiprocessing.cpu_count(),
+        n_threads_batch=multiprocessing.cpu_count(),
+        logits_all=False,
+        verbose=False,
+    )
+
+
+def _generate_test_tokens(model, tokens, max_tokens=3):
+    return list(
+        itertools.islice(
+            model.generate(
+                tokens,
+                temp=0.0,
+            ),
+            max_tokens,
+        )
+    )
+
+
+MODEL_CACHE_CASES = (
+    ("llama_cpp_transformer_model_path", False, False),
+    ("llama_cpp_recurrent_model_path", True, False),
+    ("llama_cpp_hybrid_model_path", False, True),
+)
+
+RESTORED_CACHE_CASES = MODEL_CACHE_CASES
+
+
+def _eval_alternate_same_length_prompt(model, tokens, expected_next_token):
+    replacement_tokens = (
+        model.token_eos(),
+        model.token_nl(),
+        0,
+        1,
+        2,
+        model.n_vocab() - 1,
+    )
+
+    for replacement_token in replacement_tokens:
+        alternate_tokens = list(tokens)
+        alternate_tokens[-1] = replacement_token
+        if alternate_tokens == tokens:
+            continue
+
+        model.reset()
+        model.eval(alternate_tokens)
+        if model.sample(temp=0.0, idx=len(tokens) - 1) != expected_next_token:
+            return
+
+    raise AssertionError("failed to find an alternate same-length prompt")
+
+
+def _assert_exact_cached_prompt_reuse_matches_fresh(
+    model_path,
+    *,
+    is_recurrent: bool,
+    is_hybrid: bool,
+):
+    prompt = "The quick brown fox"
+    fresh = _create_test_model(model_path)
+    tokens = fresh.tokenize(prompt.encode(), add_bos=True, special=True)
+
+    assert fresh._is_recurrent is is_recurrent
+    assert fresh._is_hybrid is is_hybrid
+
+    expected_tokens = _generate_test_tokens(fresh, tokens)
+
+    cached = _create_test_model(model_path)
+    assert cached._is_recurrent is is_recurrent
+    assert cached._is_hybrid is is_hybrid
+
+    cached.eval(tokens)
+    assert cached.n_tokens == len(tokens)
+    assert cached.input_ids[: cached.n_tokens].tolist() == tokens
+    assert cached.sample(temp=0.0, idx=len(tokens) - 1) == expected_tokens[0]
+
+    reset_calls = 0
+    original_reset = cached.reset
+
+    def reset_tracker():
+        nonlocal reset_calls
+        reset_calls += 1
+        original_reset()
+
+    cached.reset = reset_tracker
+
+    cached_tokens = _generate_test_tokens(cached, tokens)
+    assert reset_calls == 0
+    assert cached_tokens == expected_tokens
+    assert cached.n_tokens == len(tokens) + len(cached_tokens) - 1
+
+
+def _assert_loaded_exact_cached_prompt_reuse_matches_fresh(
+    model_path,
+    *,
+    is_recurrent: bool,
+    is_hybrid: bool,
+):
+    prompt = "The quick brown fox"
+    fresh = _create_test_model(model_path)
+    tokens = fresh.tokenize(prompt.encode(), add_bos=True, special=True)
+    expected_tokens = _generate_test_tokens(fresh, tokens)
+
+    source = _create_test_model(model_path)
+    assert source._is_recurrent is is_recurrent
+    assert source._is_hybrid is is_hybrid
+
+    source.eval(tokens)
+    state = source.save_state()
+
+    loaded = _create_test_model(model_path)
+    assert loaded._is_recurrent is is_recurrent
+    assert loaded._is_hybrid is is_hybrid
+
+    _eval_alternate_same_length_prompt(
+        loaded,
+        tokens,
+        expected_tokens[0],
+    )
+    loaded.load_state(state)
+
+    assert loaded.n_tokens == len(tokens)
+    assert loaded.input_ids[: loaded.n_tokens].tolist() == tokens
+
+    loaded_tokens = _generate_test_tokens(loaded, tokens)
+    assert loaded_tokens == expected_tokens
+    assert loaded.n_tokens == len(tokens) + len(loaded_tokens) - 1
+
+
+def _assert_ram_cache_exact_prompt_hit_matches_fresh(
+    model_path,
+    *,
+    is_recurrent: bool,
+    is_hybrid: bool,
+):
+    prompt = "The quick brown fox"
+    fresh = _create_test_model(model_path)
+    tokens = fresh.tokenize(prompt.encode(), add_bos=True, special=True)
+    expected = fresh.create_completion(
+        tokens,
+        max_tokens=1,
+        temperature=0.0,
+        seed=1337,
+    )
+
+    cache = llama_cpp.LlamaRAMCache()
+    writer = _create_test_model(model_path)
+    writer.set_cache(cache)
+    writer.create_completion(
+        tokens,
+        max_tokens=1,
+        temperature=0.0,
+        seed=1337,
+    )
+
+    cached = _create_test_model(model_path)
+    assert cached._is_recurrent is is_recurrent
+    assert cached._is_hybrid is is_hybrid
+    cached.set_cache(cache)
+
+    load_state_calls = 0
+    original_load_state = cached.load_state
+
+    def load_state_tracker(state):
+        nonlocal load_state_calls
+        load_state_calls += 1
+        original_load_state(state)
+
+    cached.load_state = load_state_tracker
+
+    actual = cached.create_completion(
+        tokens,
+        max_tokens=1,
+        temperature=0.0,
+        seed=1337,
+    )
+
+    assert load_state_calls == 1
+    assert actual["choices"][0]["text"] == expected["choices"][0]["text"]
+    assert (
+        actual["usage"]["completion_tokens"] == expected["usage"]["completion_tokens"]
+    )
+
+
+def _assert_shorter_prompt_prefix_reuse_matches_fresh(
+    model_path,
+    *,
+    is_recurrent: bool,
+    is_hybrid: bool,
+):
+    prompt = "The quick brown fox"
+    history = " jumps over the lazy dog"
+    fresh = _create_test_model(model_path)
+    tokens = fresh.tokenize(prompt.encode(), add_bos=True, special=True)
+    history_tokens = fresh.tokenize(history.encode(), add_bos=False, special=True)
+    expected_tokens = _generate_test_tokens(fresh, tokens)
+
+    cached = _create_test_model(model_path)
+    assert cached._is_recurrent is is_recurrent
+    assert cached._is_hybrid is is_hybrid
+
+    cached.eval(tokens + history_tokens)
+    assert cached.n_tokens > len(tokens)
+    assert cached.input_ids[: len(tokens)].tolist() == tokens
+
+    cached_tokens = _generate_test_tokens(cached, tokens)
+    assert cached_tokens == expected_tokens
+
+
+@pytest.mark.parametrize(
+    ("model_path_fixture", "is_recurrent", "is_hybrid"), MODEL_CACHE_CASES
+)
+def test_exact_cached_prompt_reuse_matches_fresh(
+    request,
+    model_path_fixture,
+    is_recurrent,
+    is_hybrid,
+):
+    _assert_exact_cached_prompt_reuse_matches_fresh(
+        request.getfixturevalue(model_path_fixture),
+        is_recurrent=is_recurrent,
+        is_hybrid=is_hybrid,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_path_fixture", "is_recurrent", "is_hybrid"), RESTORED_CACHE_CASES
+)
+def test_loaded_exact_cached_prompt_reuse_matches_fresh(
+    request,
+    model_path_fixture,
+    is_recurrent,
+    is_hybrid,
+):
+    _assert_loaded_exact_cached_prompt_reuse_matches_fresh(
+        request.getfixturevalue(model_path_fixture),
+        is_recurrent=is_recurrent,
+        is_hybrid=is_hybrid,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_path_fixture", "is_recurrent", "is_hybrid"), RESTORED_CACHE_CASES
+)
+def test_ram_cache_exact_prompt_hit_matches_fresh(
+    request,
+    model_path_fixture,
+    is_recurrent,
+    is_hybrid,
+):
+    _assert_ram_cache_exact_prompt_hit_matches_fresh(
+        request.getfixturevalue(model_path_fixture),
+        is_recurrent=is_recurrent,
+        is_hybrid=is_hybrid,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_path_fixture", "is_recurrent", "is_hybrid"), MODEL_CACHE_CASES
+)
+def test_shorter_prompt_prefix_reuse_matches_fresh(
+    request,
+    model_path_fixture,
+    is_recurrent,
+    is_hybrid,
+):
+    _assert_shorter_prompt_prefix_reuse_matches_fresh(
+        request.getfixturevalue(model_path_fixture),
+        is_recurrent=is_recurrent,
+        is_hybrid=is_hybrid,
+    )
+
+
 def test_real_llama_embeddings(llama_cpp_embedding_model_path):
     model = llama_cpp.Llama(
         llama_cpp_embedding_model_path,
@@ -247,3 +641,15 @@ def test_real_llama_embeddings(llama_cpp_embedding_model_path):
     )
     embedding = model.embed("Hello World")
     assert len(embedding) > 0
+
+    prompts = ["Hello World", "A different prompt"]
+    individual_embeddings = [model.embed(prompt) for prompt in prompts]
+    batched_embeddings = model.embed(prompts)
+
+    assert len(batched_embeddings) == len(prompts)
+    for individual, batched in zip(individual_embeddings, batched_embeddings):
+        np.testing.assert_allclose(batched, individual, rtol=1e-4, atol=1e-4)
+
+    repeated_embeddings = model.embed(list(reversed(prompts)))
+    assert len(repeated_embeddings) == len(prompts)
+    assert all(len(repeated) == len(embedding) for repeated in repeated_embeddings)

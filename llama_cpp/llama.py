@@ -397,6 +397,12 @@ class Llama:
             self.context_params.n_batch = self.n_batch
             self.context_params.n_ubatch = min(self.n_batch, n_ubatch)
 
+        if embedding:
+            self.context_params.n_seq_max = min(
+                self.n_batch,
+                llama_cpp.llama_max_parallel_sequences(),
+            )
+            self.context_params.kv_unified = True
         self._ctx = self._stack.enter_context(
             contextlib.closing(
                 internals.LlamaContext(
@@ -465,6 +471,8 @@ class Llama:
         self._candidates = internals.LlamaTokenDataArray(n_vocab=self._n_vocab)
 
         self.n_tokens = 0
+        # Restored or truncated state must decode before sampling.
+        self._requires_eval = True
         self.input_ids: npt.NDArray[np.intc] = np.ndarray((n_ctx,), dtype=np.intc)
         self.scores: npt.NDArray[np.single] = np.ndarray(
             (n_ctx if logits_all == True else n_batch, self._n_vocab), dtype=np.single
@@ -553,6 +561,10 @@ class Llama:
 
         self._sampler = None
 
+        # Cache recurrent/hybrid model detection to avoid repeated FFI calls
+        self._is_recurrent = llama_cpp.llama_model_is_recurrent(self._model.model)
+        self._is_hybrid = llama_cpp.llama_model_is_hybrid(self._model.model)
+
     @property
     def ctx(self) -> llama_cpp.llama_context_p:
         return self._ctx.ctx
@@ -637,6 +649,12 @@ class Llama:
     def reset(self):
         """Reset the model state."""
         self.n_tokens = 0
+        self._requires_eval = True
+
+        if self._is_recurrent or self._is_hybrid:
+            mem = llama_cpp.llama_get_memory(self._ctx.ctx)
+            if mem is not None:
+                llama_cpp.llama_memory_clear(mem, True)
 
     def eval(self, tokens: Sequence[int]):
         """Evaluate a list of tokens.
@@ -674,6 +692,7 @@ class Llama:
                 pass
             # Update n_tokens
             self.n_tokens += n_tokens
+            self._requires_eval = False
 
     def _init_sampler(
         self,
@@ -885,28 +904,53 @@ class Llama:
             grammar=grammar,
         )
 
+        tokens = list(tokens)
+
         # Check for kv cache prefix match
         if reset and self.n_tokens > 0:
             longest_prefix = 0
-            for a, b in zip(self._input_ids, tokens[:-1]):
+            for a, b in zip(self._input_ids, tokens):
                 if a == b:
                     longest_prefix += 1
                 else:
                     break
-            if longest_prefix > 0:
-                if self._ctx.kv_cache_seq_rm(-1, longest_prefix, -1):
+
+            prompt_consumed = longest_prefix == len(tokens)
+            exact_prompt_cached = self.n_tokens == len(tokens) and prompt_consumed
+
+            # Exact cache hits can sample immediately only when the current
+            # logits were produced by a live decode, not restored state.
+            if exact_prompt_cached and not self._requires_eval:
+                reset = False
+                tokens = []
+                reuse_prefix = 0
+                if self.verbose:
+                    print(
+                        "Llama.generate: full prompt already cached, skipping reset",
+                        file=sys.stderr,
+                    )
+            else:
+                # If there is no suffix to decode, replay one token to refresh
+                # logits after truncating to a valid prefix.
+                reuse_prefix = longest_prefix - 1 if prompt_consumed else longest_prefix
+
+            # Prefix hits can reuse memory because the suffix decode refreshes
+            # logits before sampling.
+            if reuse_prefix > 0:
+                if self._ctx.kv_cache_seq_rm(-1, reuse_prefix, -1):
                     reset = False
-                    tokens = tokens[longest_prefix:]
-                    self.n_tokens = longest_prefix
+                    tokens = tokens[reuse_prefix:]
+                    self.n_tokens = reuse_prefix
+                    self._requires_eval = True
                     if self.verbose:
                         print(
-                            f"Llama.generate: {longest_prefix} prefix-match hit, "
+                            f"Llama.generate: {reuse_prefix} prefix-match hit, "
                             f"remaining {len(tokens)} prompt tokens to eval",
                             file=sys.stderr,
                         )
                 elif self.verbose:
                     print(
-                        f"Llama.generate: {longest_prefix} prefix-match found "
+                        f"Llama.generate: {reuse_prefix} prefix-match found "
                         f"but partial kv removal not supported, re-evaluating full prompt",
                         file=sys.stderr,
                     )
@@ -920,7 +964,6 @@ class Llama:
         #     grammar.reset()
 
         sample_idx = self.n_tokens + len(tokens) - 1
-        tokens = list(tokens)
 
         # Eval and sample
         while True:
@@ -960,6 +1003,7 @@ class Llama:
                 if sample_idx < self.n_tokens and token != self._input_ids[sample_idx]:
                     self.n_tokens = sample_idx
                     self._ctx.kv_cache_seq_rm(-1, self.n_tokens, -1)
+                    self._requires_eval = True
                     break
 
             if self.draft_model is not None:
@@ -1030,10 +1074,17 @@ class Llama:
         """
         n_embd = self.n_embd()
         n_batch = self.n_batch
+        n_seq_max = self.context_params.n_seq_max
 
         # get pooling information
         pooling_type = self.pooling_type()
-        logits_all = pooling_type == llama_cpp.LLAMA_POOLING_TYPE_NONE
+        # In embedding mode every input token must be marked as an output, regardless of
+        # pooling type. llama.cpp would otherwise override per-token `logits[i]` and emit
+        # "embeddings required but some input tokens were not marked as outputs ->
+        # overriding" once per input. Pooling NONE vs MEAN/CLS only changes how the
+        # per-token outputs are read back (see decode_batch below), not whether they are
+        # produced. See abetlen/llama-cpp-python#2208.
+        logits_all = True
 
         if self.context_params.embeddings is False:
             raise RuntimeError(
@@ -1104,7 +1155,7 @@ class Llama:
                 )
 
             # time to eval batch
-            if t_batch + n_tokens > n_batch:
+            if t_batch + n_tokens > n_batch or p_batch >= n_seq_max:
                 decode_batch(s_batch)
                 s_batch = []
                 t_batch = 0
@@ -2182,6 +2233,7 @@ class Llama:
         rest[rest > 0] = 0.0
         self.input_ids = state.input_ids.copy()
         self.n_tokens = state.n_tokens
+        self._requires_eval = True
         self._seed = state.seed
         state_size = state.llama_state_size
         LLamaStateArrayType = ctypes.c_uint8 * state_size
@@ -2361,12 +2413,15 @@ class Llama:
                     )
 
                 (matching_additional_file,) = matching_additional_files
+                additional_subfolder = str(Path(matching_additional_file).parent)
+                additional_file_name = Path(matching_additional_file).name
 
-                # download the additional file
+                # Split additional file paths independently to avoid duplicating
+                # the main model subfolder in Hugging Face download URLs.
                 hf_hub_download(
                     repo_id=repo_id,
-                    filename=matching_additional_file,
-                    subfolder=subfolder,
+                    filename=additional_file_name,
+                    subfolder=additional_subfolder,
                     local_dir=local_dir,
                     local_dir_use_symlinks=local_dir_use_symlinks,
                     cache_dir=cache_dir,

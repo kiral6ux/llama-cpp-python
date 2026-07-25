@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.34]
+
+- feat: update llama.cpp to ggml-org/llama.cpp@e3546c794
+
+## [0.3.33]
+
+- feat: update llama.cpp to ggml-org/llama.cpp@78d2f5246
+
+## [0.3.32]
+
+- feat(example): support chained NextN heads for server MTP drafting
+- feat: update llama.cpp to ggml-org/llama.cpp@b3fed31b9
+- fix: preserve recurrent/hybrid model state when the full prompt is already cached by @allthatido and @abetlen in #2306
+
+## [0.3.31]
+
+- feat: update llama.cpp to ggml-org/llama.cpp@f449e0553
+
+## [0.3.30]
+
+- feat: update llama.cpp to ggml-org/llama.cpp@e3a74b299
+- feat: add Pyodide wheel support by @abetlen in #2309
+
+## [0.3.29]
+
+- feat(example): use MTMD batch encoding by @abetlen in #2301
+- feat(example): support server video inputs and Gemma text tool calls by @abetlen in #2291
+- feat: update llama.cpp to ggml-org/llama.cpp@f05cf4676
+- fix(example): support multi-step Responses tool streaming by @abetlen in #2288
+- fix(ci): Repair Linux accelerator wheels for manylinux publishing
+
+## [0.3.28]
+
+- feat(example): align server MTP support with llama.cpp by @abetlen in #2283
+- feat: update llama.cpp to ggml-org/llama.cpp@9e3b928fd
+- feat(example): add OpenAI-compatible embeddings endpoint by @abetlen in #2281
+
+## [0.3.27]
+
+- feat: update llama.cpp to ggml-org/llama.cpp@465b1f0e7
+- feat(example): Updated server example (batch processing, multi-token prediction, `/v1/responses` api, response parsing) by @abetlen in #2174
+
+## [0.3.26]
+
+- feat: Generic Multimodal Chat Handler by @abetlen in #2256
+- feat: update llama.cpp to ggml-org/llama.cpp@7c158fbb4
+- feat(ci): add ROCm wheel builds by @abetlen in #2252
+- feat(ci): add Vulkan wheel builds by @abetlen in #2251
+- fix: handle additional `from_pretrained` files in subfolders by @TNing in #2085
+
+## [0.3.25]
+
+- feat: Update llama.cpp to ggml-org/llama.cpp@210a6570c by @abetlen in #2242
+- feat: add Gemma 4 multimodal chat support by @abetlen in #2241
+- feat(ci): add CUDA 13.0 and 13.2 wheel builds by @abetlen in #2239
+- feat(ci): add CUDA 11.8 wheel builds by @abetlen in #2238
+- fix(ci): add Pascal compute capability targets to CUDA wheel builds by @abetlen in #2237
+
+## [0.3.24]
+
+- docs: update ROCm install instructions by @agronholm in #1867
+- fix: clear prompt for recurrent / hybrid models when only a partial prefix matches by @avion23 in #2108
+- fix: match Transformers `tojson` in chat template rendering by @CISC in #1486
+- fix: use env var configured multimodal library override paths when loading shared libraries by @navratil-matej in #1782
+- feat: add Jinja2 loop controls to chat templates by @handshape in #2018
+- fix: avoid cleanup errors for partially initialized `LlamaModel` objects by @usernames122 in #2173
+- fix: suppress stdout and stderr in Jupyter notebooks by @Anai-Guo in #2181
+- feat: enable arm64 musl builds by @acon96 in #2221
+- feat: Update llama.cpp to ggml-org/llama.cpp@af6528e6d
+- fix: model fails to load when chat template uses HuggingFace generation tags by @tobocop2 in #2226
+- docs: add contributing guide by @abetlen in #2229
+- chore: Migrate llama.cpp submodule URL to ggml-org/llama.cpp by @shalinib-ibm in #2034
+- fix: Enable unified KV cache for embedding contexts to preserve full per-sequence context in batch embedding calls by @SanjanaB123 in #2217
+
+## [0.3.23]
+
+- feat: Update llama.cpp to ggerganov/llama.cpp@7d442abf
+- fix: Correct batched embedding outputs for multi-sequence `embed()` calls by @Anai-Guo in #2205
+- fix: Configure embedding contexts with enough sequence slots for batched `embed()` calls
+- fix: Mark all embedding input tokens as outputs to avoid llama.cpp override warnings by @Anai-Guo in #2212
+
+## [0.3.22]
+
+- feat: Update llama.cpp to ggerganov/llama.cpp@63d93d173
+- feat(ci): Re-enable Windows CUDA wheels and add CUDA 12.5.1 wheel builds
+
+## [0.3.21]
+
+- feat: Update llama.cpp to ggerganov/llama.cpp@f53577432 and sync Python bindings
+- fix(ci): Build one arm64 release wheel for `py3-none` wheel publishing
+
 ## [0.3.20]
 
 - refactor: Replace deprecated llama.cpp references in library, docs, and examples by @abetlen in #2170

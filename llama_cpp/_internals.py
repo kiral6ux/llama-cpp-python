@@ -44,6 +44,9 @@ class LlamaModel:
         self.params = params
         self.verbose = verbose
         self._exit_stack = ExitStack()
+        # LlamaModel does not use samplers, but close() can run after partial init.
+        self.sampler = None
+        self.custom_samplers = []
 
         model = None
 
@@ -65,7 +68,6 @@ class LlamaModel:
 
         self.model = model
         self.vocab = vocab
-        self.sampler = None  # LlamaModel doesn't use samplers, but some cleanup code expects this attribute
 
         def free_model():
             if self.model is None:
@@ -522,7 +524,7 @@ class LlamaBatch:
             self.batch.seq_id[j][0] = seq_id
             self.batch.n_seq_id[j] = 1
             self.batch.logits[j] = logits_all
-        self.batch.logits[n_tokens - 1] = True
+        self.batch.logits[n_tokens0 + n_tokens - 1] = True
 
 
 class LlamaTokenDataArray:

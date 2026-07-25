@@ -59,7 +59,7 @@ pip install llama-cpp-python \
 
 ### Installation Configuration
 
-`llama.cpp` supports a number of hardware acceleration backends to speed up inference as well as backend specific options. See the [llama.cpp README](https://github.com/ggerganov/llama.cpp#build) for a full list.
+`llama.cpp` supports a number of hardware acceleration backends to speed up inference as well as backend specific options. See the [llama.cpp README](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) for a full list.
 
 All `llama.cpp` cmake build options can be set via the `CMAKE_ARGS` environment variable or via the `--config-settings / -C` cli flag during installation.
 
@@ -125,7 +125,8 @@ CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
 
 It is also possible to install a pre-built wheel with CUDA support. As long as your system meets some requirements:
 
-- CUDA Version is 12.1, 12.2, 12.3, 12.4 or 12.5
+- CUDA Version is 11.8, 12.1, 12.2, 12.3, 12.4, 12.5, 13.0 or 13.2
+- NVIDIA GPU compute capability is 6.0 through 8.9 for CUDA 11.8 wheels, 6.0 or newer for CUDA 12 wheels, or 7.5 or newer for CUDA 13 wheels
 - Python Version is 3.10, 3.11 or 3.12
 
 ```bash
@@ -134,11 +135,14 @@ pip install llama-cpp-python \
 ```
 
 Where `<cuda-version>` is one of the following:
+- `cu118`: CUDA 11.8
 - `cu121`: CUDA 12.1
 - `cu122`: CUDA 12.2
 - `cu123`: CUDA 12.3
 - `cu124`: CUDA 12.4
 - `cu125`: CUDA 12.5
+- `cu130`: CUDA 13.0
+- `cu132`: CUDA 13.2
 
 For example, to install the CUDA 12.1 wheel:
 
@@ -173,12 +177,28 @@ pip install llama-cpp-python \
 </details>
 
 <details>
-<summary>hipBLAS (ROCm)</summary>
+<summary>HIP (ROCm)</summary>
 
-To install with hipBLAS / ROCm support for AMD cards, set the `GGML_HIPBLAS=on` environment variable before installing:
+To install with HIP / ROCm support for AMD cards, set the `GGML_HIP=on` environment variable before installing:
 
 ```bash
-CMAKE_ARGS="-DGGML_HIPBLAS=on" pip install llama-cpp-python
+CMAKE_ARGS="-DGGML_HIP=on" pip install llama-cpp-python
+```
+
+**Pre-built Wheel (New)**
+
+It is also possible to install a pre-built wheel with ROCm support for Linux:
+
+```bash
+pip install llama-cpp-python \
+  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/rocm72
+```
+
+Or a pre-built wheel with HIP Radeon support for Windows:
+
+```powershell
+pip install llama-cpp-python `
+  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/hip-radeon
 ```
 
 </details>
@@ -190,6 +210,15 @@ To install with Vulkan support, set the `GGML_VULKAN=on` environment variable be
 
 ```bash
 CMAKE_ARGS="-DGGML_VULKAN=on" pip install llama-cpp-python
+```
+
+**Pre-built Wheel (New)**
+
+It is also possible to install a pre-built wheel with Vulkan support for Linux or Windows:
+
+```bash
+pip install llama-cpp-python \
+  --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
 ```
 
 </details>
@@ -269,7 +298,7 @@ To upgrade and rebuild `llama-cpp-python` add `--upgrade --force-reinstall --no-
 
 The high-level API provides a simple managed interface through the [`Llama`](https://llama-cpp-python.readthedocs.io/en/latest/api-reference/#llama_cpp.Llama) class.
 
-Below is a short example demonstrating how to use the high-level API to for basic text completion:
+Below is a short example demonstrating how to use the high-level API for basic text completion:
 
 ```python
 from llama_cpp import Llama
@@ -337,7 +366,7 @@ The high-level API also provides a simple interface for chat completion.
 Chat completion requires that the model knows how to format the messages into a single prompt.
 The `Llama` class does this using pre-registered chat formats (ie. `chatml`, `llama-2`, `gemma`, etc) or by providing a custom chat handler object.
 
-The model will will format the messages into a single prompt using the following order of precedence:
+The model will format the messages into a single prompt using the following order of precedence:
   - Use the `chat_handler` if provided
   - Use the `chat_format` if provided
   - Use the `tokenizer.chat_template` from the `gguf` model's metadata (should work for most new models, older models may not have this)
@@ -502,10 +531,16 @@ Below are the supported multi-modal models and their respective chat handlers (P
 | [llava-v1.5-13b](https://huggingface.co/mys/ggml_llava-v1.5-13b) | `Llava15ChatHandler` | `llava-1-5` |
 | [llava-v1.6-34b](https://huggingface.co/cjpais/llava-v1.6-34B-gguf) | `Llava16ChatHandler` | `llava-1-6` |
 | [moondream2](https://huggingface.co/vikhyatk/moondream2) | `MoondreamChatHandler` | `moondream2` |
-| [nanollava](https://huggingface.co/abetlen/nanollava-gguf) | `NanollavaChatHandler` | `nanollava` |
+| [nanollava](https://huggingface.co/abetlen/nanollava-gguf) | `NanoLlavaChatHandler` | `nanollava` |
 | [llama-3-vision-alpha](https://huggingface.co/abetlen/llama-3-vision-alpha-gguf) | `Llama3VisionAlphaChatHandler` | `llama-3-vision-alpha` |
 | [minicpm-v-2.6](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf) | `MiniCPMv26ChatHandler` | `minicpm-v-2.6` |
 | [qwen2.5-vl](https://huggingface.co/unsloth/Qwen2.5-VL-3B-Instruct-GGUF) | `Qwen25VLChatHandler` | `qwen2.5-vl` |
+| [gemma-4](https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF) | `Gemma4ChatHandler` | `gemma4` |
+| GGUF models with an mtmd projector and embedded chat template | `MTMDChatHandler` | `mtmd` |
+
+Try Gemma 4 12B in Google Colab -> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/abetlen/llama-cpp-python/blob/main/examples/colab/notebook.ipynb)
+
+Try Gemma 4 12B QAT in Google Colab -> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/abetlen/llama-cpp-python/blob/main/examples/colab/Gemma4-12B-QAT.ipynb)
 
 Then you'll need to use a custom chat handler to load the clip model and process the chat messages and images.
 
@@ -743,6 +778,7 @@ If you find any issues with the documentation, please open an issue or submit a 
 ## Development
 
 This package is under active development and I welcome any contributions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution workflow, PR title, changelog, testing, and style guidelines.
 
 To get started, clone the repository and install the package in editable / development mode:
 
